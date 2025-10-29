@@ -12,9 +12,7 @@ app.use(cors());
 app.use(express.json());
 app.use("/countries", countryRoutes);
 
-app.get("/", (req, res) => {
-  res.json({ message: "🌍 Country Currency & Exchange API running" });
-});
+app.get("/", (req, res) => res.json({ message: "🌍 Country Currency & Exchange API running" }));
 
 const startServer = async () => {
   try {
@@ -22,9 +20,10 @@ const startServer = async () => {
     console.log("✅ Database connected successfully.");
     await sequelize.sync({ alter: true });
     console.log("🗄️ Database synced.");
-    app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
+    app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
   } catch (err) {
-    console.error("❌ Database connection failed:", err.message);
+    console.error("❌ Server startup failed:", err);
+    process.exit(1);
   }
 };
 
