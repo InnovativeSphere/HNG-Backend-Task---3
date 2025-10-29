@@ -12,9 +12,9 @@ const router = express.Router();
 
 router.post("/refresh", refreshCountries);
 router.get("/", getAllCountries);
-router.get("/status", getStatus);
-router.get("/image", getSummaryImage);
 router.get("/:name", getCountryByName);
 router.delete("/:name", deleteCountry);
+router.get("/image", getSummaryImage);
+router.get("/status", getStatus);
 
 export default router;

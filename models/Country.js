@@ -25,7 +25,7 @@ const Country = sequelize.define("Country", {
   },
   currency_code: {
     type: DataTypes.STRING,
-    allowNull: false,
+    allowNull: true, // allow null for countries with no currency
   },
   exchange_rate: {
     type: DataTypes.FLOAT,
@@ -34,6 +34,7 @@ const Country = sequelize.define("Country", {
   estimated_gdp: {
     type: DataTypes.FLOAT,
     allowNull: true,
+    defaultValue: 0,
   },
   flag_url: {
     type: DataTypes.STRING,

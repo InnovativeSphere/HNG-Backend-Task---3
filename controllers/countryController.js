@@ -1,25 +1,43 @@
 import axios from "axios";
 import Country from "../models/Country.js";
+import { createCanvas } from "canvas";
 import fs from "fs";
 import path from "path";
-import { createCanvas } from "canvas";
 
 let lastRefreshTimestamp = null;
 
-const randomMultiplier = () => Math.floor(Math.random() * 1001) + 1000; // 1000-2000
+// Random multiplier helper
+const randomMultiplier = () => Math.floor(Math.random() * 1001) + 1000; // 1000–2000
+
+// Fallback exchange rates (if API fails)
+const FALLBACK_RATES = {
+  USD: 1,
+  EUR: 0.9,
+  NGN: 750,
+  GBP: 0.8,
+  // add more as needed
+};
 
 export const refreshCountries = async (req, res) => {
   try {
-    // Fetch countries
+    // 1️⃣ Fetch countries
     const countriesRes = await axios.get(
-      "https://restcountries.com/v2/all?fields=name,capital,region,population,flag,currencies"
+      "https://restcountries.com/v2/all?fields=name,capital,region,population,flag,currencies",
+      { timeout: 10000 }
     );
     const countriesData = countriesRes.data;
 
-    // Fetch exchange rates
-    const exchangeRes = await axios.get("https://open.er-api.com/v6/latest/USD");
-    const exchangeRates = exchangeRes.data.rates || {};
+    // 2️⃣ Fetch exchange rates
+    let exchangeRates = {};
+    try {
+      const exchangeRes = await axios.get("https://open.er-api.com/v6/latest/USD", { timeout: 10000 });
+      exchangeRates = exchangeRes.data.rates || FALLBACK_RATES;
+    } catch (err) {
+      console.warn("⚠️ Exchange Rate API failed, using fallback rates.");
+      exchangeRates = FALLBACK_RATES;
+    }
 
+    // 3️⃣ Process countries
     const processed = countriesData.map((c) => {
       const name = c.name || null;
       const capital = c.capital || null;
@@ -31,9 +49,9 @@ export const refreshCountries = async (req, res) => {
       let estimated_gdp = 0;
 
       if (Array.isArray(c.currencies) && c.currencies.length > 0) {
-        currency_code = c.currencies[0].code || null;
-        exchange_rate = currency_code ? exchangeRates[currency_code] || null : null;
-        estimated_gdp = exchange_rate ? (population * randomMultiplier()) / exchange_rate : 0;
+        currency_code = c.currencies[0].code;
+        exchange_rate = exchangeRates[currency_code] || null;
+        estimated_gdp = exchange_rate ? (population * randomMultiplier()) / exchange_rate : null;
       }
 
       return {
@@ -49,23 +67,14 @@ export const refreshCountries = async (req, res) => {
       };
     });
 
-    // Upsert with bulkCreate (updateOnDuplicate for SQLite)
-    await Country.bulkCreate(processed, {
-      updateOnDuplicate: [
-        "capital",
-        "region",
-        "population",
-        "currency_code",
-        "exchange_rate",
-        "estimated_gdp",
-        "flag_url",
-        "last_refreshed_at",
-      ],
-    });
+    // 4️⃣ Upsert into DB
+    for (const country of processed) {
+      await Country.upsert(country, { where: { name: country.name } });
+    }
 
     lastRefreshTimestamp = new Date();
 
-    // Generate summary image
+    // 5️⃣ Generate summary image
     const top5 = processed
       .filter((c) => c.estimated_gdp)
       .sort((a, b) => b.estimated_gdp - a.estimated_gdp)
@@ -90,11 +99,7 @@ export const refreshCountries = async (req, res) => {
 
     top5.forEach((c, i) => {
       ctx.font = "20px Arial";
-      ctx.fillText(
-        `${i + 1}. ${c.name} - ${c.estimated_gdp.toFixed(2)}`,
-        40,
-        180 + i * 40
-      );
+      ctx.fillText(`${i + 1}. ${c.name} - ${c.estimated_gdp.toFixed(2)}`, 40, 180 + i * 40);
     });
 
     fs.writeFileSync(imagePath, canvas.toBuffer("image/png"));
@@ -103,9 +108,12 @@ export const refreshCountries = async (req, res) => {
       message: "Countries refreshed successfully.",
       totalCountries: processed.length,
     });
-  } catch (err) {
-    console.error("Refresh Error:", err.message);
-    res.status(500).json({ error: "Failed to refresh countries data." });
+  } catch (error) {
+    console.error("Refresh Error:", error);
+    res.status(503).json({
+      error: "External data source unavailable",
+      details: "Could not fetch data from Countries or Exchange Rate API",
+    });
   }
 };
 
@@ -118,12 +126,12 @@ export const getAllCountries = async (req, res) => {
 
     let order = [];
     if (sort === "gdp_desc") order = [["estimated_gdp", "DESC"]];
-    if (sort === "gdp_asc") order = [["estimated_gdp", "ASC"]];
+    else if (sort === "gdp_asc") order = [["estimated_gdp", "ASC"]];
 
     const countries = await Country.findAll({ where, order });
     res.json(countries);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch countries." });
+  } catch (error) {
+    res.status(500).json({ error: "Internal server error" });
   }
 };
 
@@ -133,8 +141,8 @@ export const getCountryByName = async (req, res) => {
     const country = await Country.findOne({ where: { name } });
     if (!country) return res.status(404).json({ error: "Country not found" });
     res.json(country);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch country." });
+  } catch (error) {
+    res.status(500).json({ error: "Internal server error" });
   }
 };
 
@@ -144,8 +152,8 @@ export const deleteCountry = async (req, res) => {
     const deleted = await Country.destroy({ where: { name } });
     if (!deleted) return res.status(404).json({ error: "Country not found" });
     res.json({ message: "Country deleted successfully." });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to delete country." });
+  } catch (error) {
+    res.status(500).json({ error: "Internal server error" });
   }
 };
 
@@ -156,20 +164,20 @@ export const getStatus = async (req, res) => {
       total_countries: totalCountries,
       last_refreshed_at: lastRefreshTimestamp,
     });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to get status." });
+  } catch (error) {
+    res.status(500).json({ error: "Internal server error" });
   }
 };
 
 export const getSummaryImage = async (req, res) => {
   try {
     const imagePath = path.join(process.cwd(), "cache/summary.png");
-    if (!fs.existsSync(imagePath)) {
-      return res.status(404).json({ error: "Summary image not found." });
-    }
+    if (!fs.existsSync(imagePath))
+      return res.status(404).json({ error: "Summary image not found" });
+
     res.setHeader("Content-Type", "image/png");
     res.sendFile(imagePath);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to serve image." });
+  } catch (error) {
+    res.status(500).json({ error: "Internal server error" });
   }
 };
